@@ -2,8 +2,10 @@ import asyncio
 import json
 import os
 import re
+import threading
 import time
 import traceback
+from flask import Flask
 
 import discord
 from discord.ext import commands
@@ -13,27 +15,46 @@ from bcsfe import core
 from bcsfe.core.game.map import enigma as bc_enigma
 from bcsfe.core.game.gamoto import ototo as bc_ototo
 
+# ---------------------------------------------------------------------------
+# Render 포트 바인딩용 Flask 웹 서버
+# ---------------------------------------------------------------------------
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+
+# 백그라운드 쓰레드로 웹 서버 실행
+threading.Thread(target=run_flask, daemon=True).start()
+# ---------------------------------------------------------------------------
+
 core.core_data.init_data()
 load_dotenv()
 
-open_tickets: dict[int, int] = {} 
-ticket_owners: dict[int, int] = {} 
-ticket_data: dict[int, dict] = {}  
-finished_tickets: set[int] = set()  
+open_tickets: dict[int, int] = {}
+ticket_owners: dict[int, int] = {}
+ticket_data: dict[int, dict] = {}
+finished_tickets: set[int] = set()
 # ---------------------------------------------------------------------------
 # 봇 기본 설정
 # ---------------------------------------------------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True 
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 저스터웨이! 봇 내부 관리자 허용 목록
 BOT_OWNER_USER_ID = 1350789101179109408
-BOT_ADMIN_USER_IDS = {
-}
+BOT_ADMIN_USER_IDS = {}
 ADMIN_USERS_FILE = "admin_users.json"
 
 
@@ -267,16 +288,14 @@ AKU_REALM_STAGE_IDS = [255, 256, 257, 258, 265, 266, 268]
 # 세이브 파일 편집 로직
 # ---------------------------------------------------------------------------
 
+
 class SaveEditError(Exception):
     """세이브 파일 처리 중 사용자에게 보여줄 만한 에러."""
 
 
-def start_session(transfer_code: str, confirmation_code: str, cc_str: str) -> "core.ServerHandler":
-    """
-    이어하기 코드/인증 코드를 서버에 검증하고, 성공하면 세이브 데이터가
-    이미 들어있는 ServerHandler를 반환한다. 이후 이 handler를 계속 재사용해서
-    아이템만 수정하고 get_codes()로 업로드하면 됨 (재다운로드 불필요).
-    """
+def start_session(
+    transfer_code: str, confirmation_code: str, cc_str: str
+) -> "core.ServerHandler":
     try:
         cc = core.CountryCode.from_code(cc_str.lower())
     except Exception as e:
@@ -304,10 +323,6 @@ def edit_save_by_codes(
     cc_str: str,
     amounts: dict[str, int],
 ) -> tuple[str, str]:
-    """
-    (독립 호출용) 냥코 서버에서 세이브를 다운로드 -> amounts에 담긴 속성들을
-    수정 -> 다시 서버에 업로드해서 새 (이어하기 코드, 인증 코드)를 반환한다.
-    """
     server_handler = start_session(transfer_code, confirmation_code, cc_str)
     save_file = server_handler.save_file
 
@@ -324,7 +339,6 @@ def edit_save_by_codes(
 
 
 def max_power_up_cat(save_file: "core.SaveFile", cat: "core.Cat"):
-    """캐릭터를 최대 레벨(base+plus)까지 풀강한다. bcsfe의 upgrade_individual 로직과 동일."""
     power_up = core.PowerUpHelper(cat, save_file)
     target_base = power_up.get_max_possible_base() - 1
     target_plus = power_up.get_max_possible_plus()
@@ -338,7 +352,6 @@ def max_power_up_cat(save_file: "core.SaveFile", cat: "core.Cat"):
 def max_talents_cat(
     save_file: "core.SaveFile", cat: "core.Cat", ultra_only: bool = False
 ):
-    """캐릭터의 일반 본능 또는 초본능을 게임 데이터의 최대 레벨로 설정한다."""
     talent_data = save_file.cats.read_talent_data(save_file)
     if talent_data is None:
         return
@@ -368,7 +381,6 @@ def max_talents_cat(
 def apply_single_cat_actions(
     save_file: "core.SaveFile", cat: "core.Cat", actions: set[str]
 ):
-    """캐릭터 한 마리에 액션 적용. '제거'가 포함되면 다른 액션은 무시하고 제거만 한다."""
     if "remove" in actions:
         cat.remove(reset=True, save_file=save_file)
         return
@@ -388,7 +400,6 @@ def apply_single_cat_actions(
         cat.set_form(1, save_file, set_current_form=True)
 
     if "true_form" in actions:
-
         save_file.cats.true_form_cats(
             save_file, [cat], force=False, set_current_forms=True
         )
@@ -400,11 +411,6 @@ def apply_single_cat_actions(
 
 
 def apply_cat_actions(save_file: "core.SaveFile", cat_actions: dict):
-    """
-    cat_actions: {cat_id 또는 "all": {"unlock", "maxpower", "talent_max",
-                                       "ultra_talent_max", "second_form",
-                                       "true_form", "fourth_form", "remove"}}
-    """
     if "all" in cat_actions:
         actions = cat_actions["all"]
 
@@ -426,8 +432,6 @@ def apply_cat_actions(save_file: "core.SaveFile", cat_actions: dict):
 
 
 def apply_story_actions(save_file: "core.SaveFile", actions: set):
-    """actions: {"eoc_clear", "itf_clear", "cotc_clear",
-                 "eoc_treasure", "itf_treasure", "cotc_treasure"}"""
     if not actions:
         return
 
@@ -461,8 +465,6 @@ def apply_story_actions(save_file: "core.SaveFile", actions: set):
 
 
 def apply_misc_actions(save_file: "core.SaveFile", actions: set):
-    """actions: {"challenge_max", "dojo_max", "dojo_championship_clear",
-                 "itf_timed_max", "missions_complete", "rank_rewards_claim"}"""
     if not actions:
         return
 
@@ -514,7 +516,6 @@ def apply_misc_actions(save_file: "core.SaveFile", actions: set):
 
 
 def _clear_gauntlet_style_all(container):
-
     for map_index, star_group in enumerate(container.chapters):
         for star_index, chapter in enumerate(star_group.chapters):
             total_stages = len(chapter.stages)
@@ -531,14 +532,10 @@ def _clear_gauntlet_style_all(container):
 
 def _clear_all_outbreaks(save_file: "core.SaveFile"):
     outbreaks = save_file.outbreaks
-    # 챕터 ID를 다시 변환하지 않고 저장된 챕터의 모든 좀비 스테이지를
-    # 직접 클리어한다. 세이브 버전에 따라 챕터 ID 체계가 달라지는 문제를
-    # 피하기 위한 처리다.
     for chapter in outbreaks.chapters.values():
         for outbreak in chapter.outbreaks.values():
             outbreak.cleared = True
 
-    # 현재 출현 중인 좀비 습격은 완료 처리 후 다시 출현하지 않도록 제거한다.
     for chapter in outbreaks.current_outbreaks.values():
         for outbreak in chapter.outbreaks.values():
             outbreak.cleared = False
@@ -556,7 +553,6 @@ def _clear_aku_all(save_file: "core.SaveFile"):
     chapter = aku.chapters[0].chapters[0]
     for stage in chapter.stages:
         stage.clear_stage(clear_count=1)
-
 
 
 def _unlock_all_enigma_stages(save_file: "core.SaveFile"):
@@ -603,71 +599,49 @@ def _max_ototo(save_file: "core.SaveFile"):
             max_level = recipes.get_max_level(cannon_id, part_id)
             if max_level is None or max_level <= 0:
                 continue
-
-            # 파트 0은 게임 내부 저장값이 화면 표시값보다 1 낮다.
             cannon.levels[part_id] = max_level - 1 if part_id == 0 else max_level
 
 
 def apply_stage_actions(save_file: "core.SaveFile", actions: set):
-    """actions: STAGE_ACTION_LABELS의 키 값들"""
     if not actions:
         return
 
     if "zombie_clear" in actions:
         _clear_all_outbreaks(save_file)
-
     if "sol_clear" in actions:
         save_file.event_stages.clear_group(0, increment=False)
-
     if "event_clear" in actions:
         save_file.event_stages.clear_group(1, increment=False)
-
     if "collab_clear" in actions:
         save_file.event_stages.clear_group(2, increment=False)
-
     if "gauntlet_clear" in actions:
         _clear_gauntlet_style_all(save_file.gauntlets)
-
     if "collab_gauntlet_clear" in actions:
         _clear_gauntlet_style_all(save_file.collab_gauntlets)
-
     if "tower_clear" in actions:
         _clear_gauntlet_style_all(save_file.tower.chapters)
-
     if "uncanny_clear" in actions:
         _clear_gauntlet_style_all(save_file.uncanny.chapters)
-
     if "legend_quest_clear" in actions:
         _clear_gauntlet_style_all(save_file.legend_quest)
-
     if "zero_legends_clear" in actions:
         _clear_gauntlet_style_all(save_file.zero_legends)
-
     if "behemoth_clear" in actions:
         _clear_gauntlet_style_all(save_file.behemoth_culling)
-
     if "aku_unlock" in actions:
         _unlock_aku_realm(save_file)
-
     if "aku_clear" in actions:
         _clear_aku_all(save_file)
-
     if "catamin_clear" in actions:
         _clear_gauntlet_style_all(save_file.catamin_stages.chapters)
-
     if "enigma_clear" in actions:
         _clear_gauntlet_style_all(save_file.enigma_clears)
-
     if "enigma_unlock" in actions:
         _unlock_all_enigma_stages(save_file)
-
     if "gamatoto_max" in actions:
         _max_gamatoto(save_file)
-
     if "ototo_max" in actions:
         _max_ototo(save_file)
-
-
 async def finalize_ticket(channel: discord.TextChannel, user_id: int, state: dict):
     amounts: dict[str, int] = {}
     for name, value in state["items"].items():
@@ -780,10 +754,8 @@ def apply_special_item(
 ):
     if item_name == "캣츠아이":
         save_file.catseyes = [amount] * len(save_file.catseyes)
-
     elif item_name == "개다래":
         save_file.catfruit = [amount] * len(save_file.catfruit)
-
     elif item_name == "배틀 아이템":
         for item in save_file.battle_items.items:
             item.amount = amount
@@ -839,10 +811,9 @@ async def get_or_create_closed_category(guild: discord.Guild) -> discord.Categor
             ),
         },
     )
- 
- 
-async def remove_ticket_owner_access(guild: discord.Guild, owner_id: int):
 
+
+async def remove_ticket_owner_access(guild: discord.Guild, owner_id: int):
     member = guild.get_member(owner_id)
     if member is None:
         try:
@@ -851,12 +822,11 @@ async def remove_ticket_owner_access(guild: discord.Guild, owner_id: int):
             member = None
  
     if member is None:
-
         member = discord.Object(id=owner_id)
  
     return member
- 
- 
+
+
 async def close_ticket_channel(
     channel: discord.TextChannel,
     reason: str,
@@ -881,28 +851,17 @@ async def close_ticket_channel(
         await asyncio.sleep(1)
         await channel.delete(reason=reason)
         return True
-    except discord.NotFound:
-        return False
-    except discord.Forbidden:
-        return False
-    except discord.HTTPException:
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         return False
 
 
 async def prompt_close_ticket(channel: discord.TextChannel):
     finished_tickets.add(channel.id)
-
-    await channel.send(
-        view=CloseButton(),
-    )
-
+    await channel.send(view=CloseButton())
     await asyncio.sleep(300)
     if channel.name.startswith("close-ticket-"):
         return
-
     await close_ticket_channel(channel, "티켓 자동 종료")
- 
-
 
 
 @bot.event
@@ -944,7 +903,6 @@ async def on_message(message: discord.Message):
         await message.channel.send(embed=embed, view=TicketView())
         return
 
-    
     if message.channel.id not in open_tickets.values():
         return
 
@@ -1068,14 +1026,11 @@ async def on_message(message: discord.Message):
                     await prompt_close_ticket(message.channel)
             except Exception:
                 traceback.print_exc()
-                await message.channel.send(
-                    "처리 중 예상치 못한 오류가 발생했어요."
-                )
+                await message.channel.send("처리 중 예상치 못한 오류가 발생했어요.")
             ticket_data.pop(user.id, None)
             return
 
         state["step"] = 1
-
         await message.channel.send(
             "코드 확인 완료!\n\n" + MAIN_MENU_TEXT + "\n\n",
             view=ConfirmView(),
@@ -1089,18 +1044,16 @@ async def on_message(message: discord.Message):
                 "수정할 아이템 번호를 입력해주세요.\n\n" + ITEM_MENU_TEXT
             )
             return
-
         if message.content == "2":
             state["step"] = 4
             state["cat_mode"] = "acquire"
             await message.channel.send(
                 "**[캐릭터 획득]**\n"
-                "캐릭터 **ID**를 입력하면 선택되고, **이름**을 입력하면 검색돼요. (검색이 오래 걸릴 수 있습니다.)\n\n"
+                "캐릭터 **ID**를 입력하면 선택되고, **이름**을 입력하면 검색돼요.\n\n"
                 "`all`을 입력하면 모든 캐릭터를 얻을 수 있습니다.\n"
                 "(0을 입력하면 메인 메뉴로 돌아갑니다.)"
             )
             return
-
         if message.content == "3":
             state["step"] = 4
             state["cat_mode"] = "remove"
@@ -1111,47 +1064,36 @@ async def on_message(message: discord.Message):
                 "(0을 입력하면 메인 메뉴로 돌아갑니다.)"
             )
             return
-
         if message.content == "4":
             state["step"] = 7
             await message.channel.send(
                 "**[스토리 클리어 / 보물]**\n"
                 "적용할 항목 번호를 입력해주세요. 여러 개면 쉼표로 구분 (예: 1,2,3,4,5,6)\n"
-                "`all`을 입력하면 스토리 클리어와 보물 항목을 모두 적용합니다.\n\n"
-                + STORY_ACTION_MENU_TEXT
-                + "\n\n(0을 입력하면 메인 메뉴로 돌아갑니다.)"
+                + STORY_ACTION_MENU_TEXT + "\n\n(0을 입력하면 메인 메뉴로 돌아갑니다.)"
             )
             return
-
         if message.content == "5":
             state["step"] = 8
             await message.channel.send(
                 "**[점수 & 콘텐츠]**\n"
                 "적용할 항목 번호를 입력해주세요. 여러 개면 쉼표로 구분 (예: 1,2,3,4,5,6)\n"
-                "`all`을 입력하면 점수와 콘텐츠 항목을 모두 적용합니다.\n\n"
-                + MISC_ACTION_MENU_TEXT
-                + "\n\n(0을 입력하면 메인 메뉴로 돌아갑니다.)"
+                + MISC_ACTION_MENU_TEXT + "\n\n(0을 입력하면 메인 메뉴로 돌아갑니다.)"
             )
             return
-
         if message.content == "6":
             state["step"] = 9
             await message.channel.send(
                 "**[콘텐츠 클리어]**\n"
                 "적용할 항목 번호를 입력해주세요. 여러 개면 쉼표로 구분 (예: 1,2,5,7)\n"
-                "`all`을 입력하면 모든 콘텐츠 클리어 항목을 적용합니다.\n\n"
-                + STAGE_ACTION_MENU_TEXT
-                + "\n\n(0을 입력하면 메인 메뉴로 돌아갑니다.)"
+                + STAGE_ACTION_MENU_TEXT + "\n\n(0을 입력하면 메인 메뉴로 돌아갑니다.)"
             )
             return
-
         if message.content == "확인":
             await finalize_ticket(message.channel, user.id, state)
             return
 
         await message.channel.send(
-            "1(아이템), 2(캐릭터 획득), 3(캐릭터 제거), 4(스토리 클리어/보물), "
-            "5(점수 & 콘텐츠), 6(콘텐츠 클리어), 또는 아래 `확인 및 적용` 버튼을 눌러주세요."
+            "1~6 메뉴를 선택하거나 아래 `확인 및 적용` 버튼을 눌러주세요."
         )
         return
 
@@ -1160,28 +1102,19 @@ async def on_message(message: discord.Message):
             item_name = ITEMS[message.content]
             state["selected_item"] = message.content
             state["step"] = 3
-            await message.channel.send(f"{item_name} 개수를 입력해주세요. (0또는 취소를 입력하면 처음으로 돌아가요.)")
+            await message.channel.send(f"{item_name} 개수를 입력해주세요. (0 또는 취소 입력시 처음으로)")
             return
-
         if message.content.strip() in ("0", "취소", "뒤로"):
             state["step"] = 1
-            await message.channel.send(
-                "항목을 선택해주세요.\n\n" + MAIN_MENU_TEXT,
-                view=ConfirmView(),
-            )
+            await message.channel.send("항목을 선택해주세요.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
             return
-
-        await message.channel.send("아이템 번호(1~12)를 입력하거나, 0또는 취소를 입력해서 메인 메뉴로 돌아가세요.")
+        await message.channel.send("아이템 번호(1~12)를 올바르게 입력해주세요.")
         return
 
     if state["step"] == 3 and message.content.strip() in ("0", "취소", "뒤로"):
         state["step"] = 2
         state["selected_item"] = None
-
-        await message.channel.send(
-            "아이템 선택을 취소했습니다.\n\n"
-            "수정할 아이템 번호를 입력해주세요.\n\n" + ITEM_MENU_TEXT
-        )
+        await message.channel.send("아이템 선택을 취소했습니다.\n\n" + ITEM_MENU_TEXT)
         return
 
     if state["step"] == 3:
@@ -1197,18 +1130,14 @@ async def on_message(message: discord.Message):
         else:
             attr = ITEM_NAME_TO_ATTR.get(item_name)
             limit = ATTR_MAX.get(attr, DEFAULT_MAX)
-
             if not (0 <= amount <= limit):
                 await message.channel.send(f"{item_name}는 0~{limit} 사이로 입력해주세요.")
                 return
-
             state["items"][item_name] = amount
 
         state["step"] = 1
-
         await message.channel.send(
-            f"{item_name} {amount:,}개 적용됨\n\n"
-            "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
+            f"{item_name} {amount:,}개 적용됨\n\n항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
             view=ConfirmView(),
         )
         return
@@ -1220,10 +1149,7 @@ async def on_message(message: discord.Message):
         if text in ("0", "확인", "취소", "뒤로"):
             state["step"] = 1
             state["cat_mode"] = None
-            await message.channel.send(
-                "항목을 선택해주세요.\n\n" + MAIN_MENU_TEXT,
-                view=ConfirmView(),
-            )
+            await message.channel.send("항목을 선택해주세요.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
             return
 
         if not text:
@@ -1234,552 +1160,248 @@ async def on_message(message: discord.Message):
 
         if text.lower() == "all":
             if cat_mode == "remove":
-                cat_actions = state.setdefault("cat_actions", {})
-                cat_actions["all"] = {"remove"}
+                state.setdefault("cat_actions", {})["all"] = {"remove"}
                 state["step"] = 1
                 state["cat_mode"] = None
-                await message.channel.send(
-                    "현재 풀려있는 **모든 캐릭터 제거**가 예약됐어요.\n\n"
-                    "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
-                    view=ConfirmView(),
-                )
+                await message.channel.send("모든 캐릭터 제거 예약됨.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
                 return
-
             state["pending_cat_id"] = "all"
             state["pending_cat_name"] = "모든 캐릭터"
             state["step"] = 6
-            await message.channel.send(
-                "모든 캐릭터 선택됨.\n\n"
-                "적용할 작업 번호를 입력해주세요. 여러 개면 쉼표로 구분 (예: 1,2,3)\n\n"
-                + CAT_ACTION_MENU_TEXT
-            )
+            await message.channel.send("모든 캐릭터 선택됨.\n\n작업 번호를 입력해주세요:\n" + CAT_ACTION_MENU_TEXT)
             return
 
         if text.isdigit():
             cat_id = int(text)
             cat = save_file.cats.get_cat_by_id(cat_id)
             if cat is None:
-                await message.channel.send(
-                    f"ID {cat_id} 캐릭터를 찾을 수 없어요. 다시 입력해주세요. "
-                    "(캐릭터 검색을 이용해주세요.)"
-                )
+                await message.channel.send(f"ID {cat_id} 캐릭터를 찾을 수 없어요.")
                 return
-
             display = get_cat_display_name(save_file, cat)
-
             if cat_mode == "remove":
-                cat_actions = state.setdefault("cat_actions", {})
-                cat_actions.setdefault(cat.id, set()).add("remove")
+                state.setdefault("cat_actions", {}).setdefault(cat.id, set()).add("remove")
                 state["step"] = 1
                 state["cat_mode"] = None
-                await message.channel.send(
-                    f"'{display}'(ID {cat.id}) **제거**가 적용됐어요.\n\n"
-                    "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
-                    view=ConfirmView(),
-                )
+                await message.channel.send(f"'{display}' 제거됨.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
                 return
-
             state["pending_cat_id"] = cat.id
             state["pending_cat_name"] = display
             state["step"] = 6
-            await message.channel.send(
-                f"'{display}' (ID {cat.id}) 선택됨.\n\n"
-                "적용할 작업 번호를 입력해주세요. 여러 개면 쉼표로 구분 (예: 1,2,3)\n\n"
-                + CAT_ACTION_MENU_TEXT
-            )
+            await message.channel.send(f"'{display}' 선택됨.\n\n작업 번호 입력:\n" + CAT_ACTION_MENU_TEXT)
             return
 
         matches = save_file.cats.get_cats_name(save_file, text)
-
         if not matches:
-            await message.channel.send(
-                f"'{text}' 이름으로 캐릭터를 못 찾았어요. 다시 입력해주세요. "
-                "(0을 입력하면 메인 메뉴로 돌아가요)"
-            )
+            await message.channel.send(f"'{text}' 검색 결과가 없어요.")
             return
-
         if len(matches) > 1:
             lines = [f"'{text}' 검색 결과 ({len(matches)}건)\n"]
-
             for cat in matches[:25]:
-                name = get_cat_display_name(save_file, cat)
-                lines.append(f"`{cat.id:>4}` │ {name}")
-
-            if len(matches) > 25:
-                lines.append(f"\n그 외 {len(matches) - 25}개가 더 있어요. 검색어를 더 구체적으로 입력해주세요.")
-
+                lines.append(f"`{cat.id:>4}` │ {get_cat_display_name(save_file, cat)}")
             await message.channel.send("\n".join(lines))
             return
 
         cat = matches[0]
         display = get_cat_display_name(save_file, cat)
-
         if cat_mode == "remove":
-            cat_actions = state.setdefault("cat_actions", {})
-            cat_actions.setdefault(cat.id, set()).add("remove")
+            state.setdefault("cat_actions", {}).setdefault(cat.id, set()).add("remove")
             state["step"] = 1
             state["cat_mode"] = None
-            await message.channel.send(
-                f"'{display}'(ID {cat.id}) **제거**가 적용됐어요.\n\n"
-                "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
-                view=ConfirmView(),
-            )
+            await message.channel.send(f"'{display}' 제거됨.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
             return
-
         state["pending_cat_id"] = cat.id
         state["pending_cat_name"] = display
         state["step"] = 6
-        await message.channel.send(
-            f"'{display}' (ID {cat.id}) 선택됨.\n\n"
-            "적용할 작업 번호를 입력해주세요. 여러 개면 쉼표로 구분 (예: 1,2,3)\n\n"
-            + CAT_ACTION_MENU_TEXT
-        )
+        await message.channel.send(f"'{display}' 선택됨.\n\n작업 번호 입력:\n" + CAT_ACTION_MENU_TEXT)
         return
 
     if state["step"] == 6:
-
         if message.content.strip() in ("0", "취소", "뒤로"):
             state["step"] = 4
             state.pop("pending_cat_id", None)
             state.pop("pending_cat_name", None)
-
-            await message.channel.send(
-                "캐릭터 선택을 취소했습니다.\n\n"
-                "캐릭터 ID를 입력하거나 이름을 검색해주세요.\n"
-                "(0을 입력하면 메인 메뉴로 돌아갑니다.)"
-            )
+            await message.channel.send("캐릭터 선택 취소됨.")
             return
         raw_parts = [p.strip() for p in message.content.split(",") if p.strip()]
-        actions: set[str] = set()
-        invalid = []
-        for part in raw_parts:
-            if part in CAT_ACTION_MENU_KEYS:
-                actions.add(CAT_ACTION_MENU_KEYS[part])
-            else:
-                invalid.append(part)
-
+        actions = {CAT_ACTION_MENU_KEYS[p] for p in raw_parts if p in CAT_ACTION_MENU_KEYS}
         if not actions:
-            await message.channel.send("1~7 사이 번호를 쉼표로 구분해서 입력해주세요. 예: 1,3,4")
+            await message.channel.send("1~7 사이 번호를 입력해주세요.")
             return
-
         cat_id = state["pending_cat_id"]
         cat_name = state.get("pending_cat_name", str(cat_id))
-        cat_actions = state.setdefault("cat_actions", {})
-        cat_actions.setdefault(cat_id, set()).update(actions)
-
-        action_names = ", ".join(CAT_ACTION_LABELS[a] for a in actions)
+        state.setdefault("cat_actions", {}).setdefault(cat_id, set()).update(actions)
         state["step"] = 1
         state["cat_mode"] = None
-        note = f" (인식 못한 입력 무시: {', '.join(invalid)})" if invalid else ""
-        await message.channel.send(
-            f"'{cat_name}'(ID {cat_id})에 [{action_names}] 적용됨{note}\n\n"
-            "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
-            view=ConfirmView(),
-        )
+        await message.channel.send(f"'{cat_name}' 작업 적용됨.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
         return
 
     if state["step"] == 7:
         text = message.content.strip()
-
         if text in ("0", "취소", "뒤로"):
             state["step"] = 1
-            await message.channel.send(
-                "항목을 선택해주세요.\n\n" + MAIN_MENU_TEXT,
-                view=ConfirmView(),
-            )
+            await message.channel.send("항목 선택.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
             return
-
-        actions: set[str] = set()
-        invalid = []
+        actions = set()
         raw_parts = [p.strip() for p in text.split(",") if p.strip()]
-        if any(part.lower() == "all" for part in raw_parts):
+        if any(p.lower() == "all" for p in raw_parts):
             actions.update(STORY_ACTION_MENU_KEYS.values())
         else:
-            for part in raw_parts:
-                if part in STORY_ACTION_MENU_KEYS:
-                    actions.add(STORY_ACTION_MENU_KEYS[part])
-                else:
-                    invalid.append(part)
-
+            actions.update(STORY_ACTION_MENU_KEYS[p] for p in raw_parts if p in STORY_ACTION_MENU_KEYS)
         if not actions:
-            await message.channel.send(
-                "1~6 사이 번호를 쉼표로 구분해서 입력해주세요. 예: 1,2,3,4,5,6\n\n"
-                + STORY_ACTION_MENU_TEXT
-            )
+            await message.channel.send("1~6 사이 번호를 입력해주세요.")
             return
-
-        story_actions = state.setdefault("story_actions", set())
-        story_actions.update(actions)
-
-        action_names = ", ".join(STORY_ACTION_LABELS[a] for a in actions)
+        state.setdefault("story_actions", set()).update(actions)
         state["step"] = 1
-        note = f" (인식 못한 입력 무시: {', '.join(invalid)})" if invalid else ""
-        await message.channel.send(
-            f"[{action_names}] 적용됨{note}\n\n"
-            "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
-            view=ConfirmView(),
-        )
+        await message.channel.send("스토리 작업 적용됨.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
         return
 
     if state["step"] == 8:
         text = message.content.strip()
-
         if text in ("0", "취소", "뒤로"):
             state["step"] = 1
-            await message.channel.send(
-                "항목을 선택해주세요.\n\n" + MAIN_MENU_TEXT,
-                view=ConfirmView(),
-            )
+            await message.channel.send("항목 선택.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
             return
-
-        actions: set[str] = set()
-        invalid = []
+        actions = set()
         raw_parts = [p.strip() for p in text.split(",") if p.strip()]
-        if any(part.lower() == "all" for part in raw_parts):
+        if any(p.lower() == "all" for p in raw_parts):
             actions.update(MISC_ACTION_MENU_KEYS.values())
         else:
-            for part in raw_parts:
-                if part in MISC_ACTION_MENU_KEYS:
-                    actions.add(MISC_ACTION_MENU_KEYS[part])
-                else:
-                    invalid.append(part)
-
+            actions.update(MISC_ACTION_MENU_KEYS[p] for p in raw_parts if p in MISC_ACTION_MENU_KEYS)
         if not actions:
-            await message.channel.send(
-                "1~6 사이 번호를 쉼표로 구분해서 입력해주세요. 예: 1,2,5,6\n\n"
-                + MISC_ACTION_MENU_TEXT
-            )
+            await message.channel.send("1~6 사이 번호를 입력해주세요.")
             return
-
-        misc_actions = state.setdefault("misc_actions", set())
-        misc_actions.update(actions)
-
-        action_names = ", ".join(MISC_ACTION_LABELS[a] for a in actions)
+        state.setdefault("misc_actions", set()).update(actions)
         state["step"] = 1
-        note = f" (인식 못한 입력 무시: {', '.join(invalid)})" if invalid else ""
-        warn = ""
-        if actions & NOT_READY_MISC_ACTIONS:
-            warn = "\n(⚠️ 준비중 항목은 선택만 되고 실제로는 아직 적용되지 않아요.)"
-        await message.channel.send(
-            f"[{action_names}] 적용됨{note}{warn}\n\n"
-            "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
-            view=ConfirmView(),
-        )
+        await message.channel.send("콘텐츠 작업 적용됨.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
         return
 
     if state["step"] == 9:
         text = message.content.strip()
-
         if text in ("0", "취소", "뒤로"):
             state["step"] = 1
-            await message.channel.send(
-                "항목을 선택해주세요.\n\n" + MAIN_MENU_TEXT,
-                view=ConfirmView(),
-            )
+            await message.channel.send("항목 선택.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
             return
-
-        actions: set[str] = set()
-        invalid = []
+        actions = set()
         raw_parts = [p.strip() for p in text.split(",") if p.strip()]
-        if any(part.lower() == "all" for part in raw_parts):
+        if any(p.lower() == "all" for p in raw_parts):
             actions.update(STAGE_ACTION_MENU_KEYS.values())
         else:
-            for part in raw_parts:
-                if part in STAGE_ACTION_MENU_KEYS:
-                    actions.add(STAGE_ACTION_MENU_KEYS[part])
-                else:
-                    invalid.append(part)
-
+            actions.update(STAGE_ACTION_MENU_KEYS[p] for p in raw_parts if p in STAGE_ACTION_MENU_KEYS)
         if not actions:
-            await message.channel.send(
-                "1~18 사이 번호를 쉼표로 구분해서 입력해주세요. 예: 1,2,5,7\n\n"
-                + STAGE_ACTION_MENU_TEXT
-            )
+            await message.channel.send("1~18 사이 번호를 입력해주세요.")
             return
-
-        stage_actions = state.setdefault("stage_actions", set())
-        stage_actions.update(actions)
-
-        action_names = ", ".join(STAGE_ACTION_LABELS[a] for a in actions)
+        state.setdefault("stage_actions", set()).update(actions)
         state["step"] = 1
-        note = f" (인식 못한 입력 무시: {', '.join(invalid)})" if invalid else ""
-        await message.channel.send(
-            f"[{action_names}] 적용됨{note}\n\n"
-            "항목을 선택해주세요.\n" + MAIN_MENU_TEXT,
-            view=ConfirmView(),
-        )
+        await message.channel.send("스테이지 작업 적용됨.\n\n" + MAIN_MENU_TEXT, view=ConfirmView())
         return
+
 
 class CloseButton(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
  
-    @discord.ui.button(
-        label="Close",
-        style=discord.ButtonStyle.danger,
-        emoji="🔒",
-        custom_id="ticket_close_button",
-    )
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket_close_button")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         channel = interaction.channel
- 
         if channel.name.startswith("close-ticket-"):
             await interaction.response.send_message("이미 닫힌 티켓이에요.", ephemeral=True)
             return
- 
         await interaction.response.send_message("티켓을 닫는 중이에요...", ephemeral=True)
-
         await close_ticket_channel(channel, "티켓 수동 종료")
 
- 
+
 class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
  
-    @discord.ui.button(
-        label="🎫티켓 생성",
-        style=discord.ButtonStyle.green,
-        custom_id="ticket_create_button",
-    )
+    @discord.ui.button(label="🎫티켓 생성", style=discord.ButtonStyle.green, custom_id="ticket_create_button")
     async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         user = interaction.user
-
         if not is_bot_admin(user):
-            await interaction.response.send_message(
-                "티켓 생성은 관리자만 사용할 수 있어요.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
- 
         if user.id in open_tickets:
             channel = guild.get_channel(open_tickets[user.id])
             if channel:
-                await interaction.response.send_message(
-                    f"이미 티켓이 있습니다.\n{channel.mention}", ephemeral=True
-                )
+                await interaction.response.send_message(f"이미 티켓이 있습니다.\n{channel.mention}", ephemeral=True)
                 return
- 
-        category = discord.utils.get(guild.categories, name="티켓")
- 
-        if category is None:
-            category = await guild.create_category("티켓")
- 
+        category = discord.utils.get(guild.categories, name="티켓") or await guild.create_category("티켓")
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            user: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True
-            ),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, manage_channels=True
-            ),
+            user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
         }
- 
-        channel = await guild.create_text_channel(
-            name=f"ticket-{user.name}", category=category, overwrites=overwrites
-        )
- 
+        channel = await guild.create_text_channel(name=f"ticket-{user.name}", category=category, overwrites=overwrites)
         open_tickets[user.id] = channel.id
         ticket_owners[channel.id] = user.id
- 
-        await interaction.response.send_message(
-            f"{channel.mention} 생성되었습니다.", ephemeral=True
-        )
- 
-        welcome_embed = discord.Embed(
-            description=(
-                f"안녕하세요 {user.mention}님!\n\n"
-                "스태프가 곧 답변 드리겠습니다.\n"
-                "기다려주셔서 감사합니다."
-            ),
-            color=0x2ECC71,
-        )
+        await interaction.response.send_message(f"{channel.mention} 생성되었습니다.", ephemeral=True)
+        welcome_embed = discord.Embed(description=f"안녕하세요 {user.mention}님!\n스태프가 곧 답변 드리겠습니다.", color=0x2ECC71)
         await channel.send(embed=welcome_embed, view=CloseButton())
- 
         await asyncio.sleep(1)
- 
-        await channel.send(
-            f"{user.mention}님 안녕하세요!\n\n"
-            "어떤 일 때문에 티켓을 여셨나요?\n\n"
-            "1. 이벤트\n"
-            "2. 밴 해제"
-        )
- 
- 
-admin_group = discord.app_commands.Group(
-    name="관리자",
-    description="냥코 봇 관리자 관리",
-)
+        await channel.send(f"{user.mention}님 안녕하세요!\n어떤 일 때문에 티켓을 여셨나요?\n\n1. 이벤트\n2. 밴 해제")
 
 
-@admin_group.command(name="추가", description="멘션한 사용자를 냥코 봇 관리자로 추가합니다.")
+admin_group = discord.app_commands.Group(name="관리자", description="냥코 봇 관리자 관리")
+
+@admin_group.command(name="추가", description="사용자를 냥코 봇 관리자로 추가합니다.")
 @discord.app_commands.describe(member="관리자로 추가할 디스코드 사용자")
-async def add_admin(
-    interaction: discord.Interaction,
-    member: discord.Member,
-):
+async def add_admin(interaction: discord.Interaction, member: discord.Member):
     if interaction.user.id != BOT_OWNER_USER_ID:
-        await interaction.response.send_message(
-            "이 명령어는 봇 소유자만 사용할 수 있습니다.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message("봇 소유자만 사용할 수 있습니다.", ephemeral=True)
         return
-
-    if member.bot:
-        await interaction.response.send_message(
-            "봇 계정은 관리자로 추가할 수 없습니다.",
-            ephemeral=True,
-        )
+    if member.bot or member.id in ADDED_ADMIN_USER_IDS:
+        await interaction.response.send_message("추가할 수 없는 대상이거나 이미 관리자입니다.", ephemeral=True)
         return
-
-    if member.id in BOT_ADMIN_USER_IDS or member.id in ADDED_ADMIN_USER_IDS:
-        await interaction.response.send_message(
-            f"{member.mention}님은 이미 냥코 봇 관리자입니다.",
-            ephemeral=True,
-        )
-        return
-
     ADDED_ADMIN_USER_IDS.add(member.id)
     save_added_admin_ids()
+    await interaction.response.send_message(f"{member.mention}님을 관리자로 추가했습니다.", ephemeral=True)
 
-    await interaction.response.send_message(
-        f"{member.mention}님을 냥코 봇 관리자로 추가했습니다.",
-        ephemeral=True,
-    )
-
-    try:
-        await member.send(
-            "냥코 봇 관리자로 추가되었습니다.\n"
-            "이제 이 서버에서 냥코 티켓과 봇 관리자 기능을 사용할 수 있습니다."
-        )
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "관리자 추가는 완료했지만, 해당 사용자의 DM이 차단되어 안내 메시지를 보내지 못했습니다.",
-            ephemeral=True,
-        )
-
-
-@admin_group.command(name="제거", description="멘션한 사용자를 냥코 봇 관리자에서 제거합니다.")
+@admin_group.command(name="제거", description="사용자를 냥코 봇 관리자에서 제거합니다.")
 @discord.app_commands.describe(member="관리자에서 제거할 디스코드 사용자")
-async def remove_admin(
-    interaction: discord.Interaction,
-    member: discord.Member,
-):
+async def remove_admin(interaction: discord.Interaction, member: discord.Member):
     if interaction.user.id != BOT_OWNER_USER_ID:
-        await interaction.response.send_message(
-            "이 명령어는 봇 소유자만 사용할 수 있습니다.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message("봇 소유자만 사용할 수 있습니다.", ephemeral=True)
         return
-
-    if member.id == BOT_OWNER_USER_ID or member.id in BOT_ADMIN_USER_IDS:
-        await interaction.response.send_message(
-            f"{member.mention}님은 기본 관리자라서 제거할 수 없습니다.",
-            ephemeral=True,
-        )
-        return
-
     if member.id not in ADDED_ADMIN_USER_IDS:
-        await interaction.response.send_message(
-            f"{member.mention}님은 추가된 냥코 봇 관리자가 아닙니다.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message("추가된 관리자가 아닙니다.", ephemeral=True)
         return
-
     ADDED_ADMIN_USER_IDS.remove(member.id)
     save_added_admin_ids()
-
-    await interaction.response.send_message(
-        f"{member.mention}님을 냥코 봇 관리자에서 제거했습니다.",
-        ephemeral=True,
-    )
-
-    try:
-        await member.send(
-            "냥코 봇 관리자 권한이 제거되었습니다.\n"
-            "이제 냥코 티켓과 봇 관리자 기능을 사용할 수 없습니다."
-        )
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "관리자 제거는 완료했지만, 해당 사용자의 DM이 차단되어 안내 메시지를 보내지 못했습니다.",
-            ephemeral=True,
-        )
+    await interaction.response.send_message(f"{member.mention}님을 관리자에서 제거했습니다.", ephemeral=True)
 
 
-ticket_group = discord.app_commands.Group(
-    name="티켓",
-    description="냥코 티켓 관리",
-)
-
+ticket_group = discord.app_commands.Group(name="티켓", description="냥코 티켓 관리")
 
 @ticket_group.command(name="닫기", description="현재 티켓을 강제로 닫고 채널을 삭제합니다.")
 async def force_close_ticket(interaction: discord.Interaction):
     channel = interaction.channel
-
     if not isinstance(channel, discord.TextChannel):
-        await interaction.response.send_message(
-            "이 명령어는 티켓 텍스트 채널에서만 사용할 수 있습니다.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message("티켓 채널에서만 사용할 수 있습니다.", ephemeral=True)
         return
-
     owner_id = ticket_owners.get(channel.id)
-    is_ticket_channel = channel.id in ticket_owners or channel.name.startswith("ticket-")
-    if not is_ticket_channel:
-        await interaction.response.send_message(
-            "현재 채널은 티켓 채널이 아닙니다.",
-            ephemeral=True,
-        )
+    if not (is_bot_admin(interaction.user) or interaction.user.id == owner_id):
+        await interaction.response.send_message("권한이 없습니다.", ephemeral=True)
         return
-
-    if not is_bot_admin(interaction.user) and interaction.user.id != owner_id:
-        await interaction.response.send_message(
-            "티켓 소유자 또는 등록된 봇 관리자만 티켓을 닫을 수 있습니다.",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.response.send_message(
-        "티켓을 강제로 닫는 중이에요...",
-        ephemeral=True,
-    )
-    await close_ticket_channel(channel, "슬래시 명령어로 티켓 강제 종료")
+    await interaction.response.send_message("티켓을 닫는 중...", ephemeral=True)
+    await close_ticket_channel(channel, "강제 종료")
 
 
 bot.tree.add_command(admin_group)
 bot.tree.add_command(ticket_group)
 
-
-@bot.tree.command(name="티켓패널", description="냥코 티켓 생성 패널을 표시합니다.")
+@bot.tree.command(name="티켓패널", description="패널 표시")
 async def ticketpanel_slash(interaction: discord.Interaction):
-    if not isinstance(interaction.user, discord.Member) or not is_bot_admin(
-        interaction.user
-    ):
-        await interaction.response.send_message(
-            "관리자만 사용할 수 있는 명령어입니다.",
-            ephemeral=True,
-        )
+    if not is_bot_admin(interaction.user):
+        await interaction.response.send_message("관리자만 가능합니다.", ephemeral=True)
         return
-
-    embed = discord.Embed(
-        title="냥코 티켓",
-        description="아래 버튼을 눌러 티켓을 생성하세요.",
-        color=0x2ECC71,
-    )
+    embed = discord.Embed(title="냥코 티켓", description="버튼을 눌러 티켓 생성", color=0x2ECC71)
     await interaction.response.send_message(embed=embed, view=TicketView())
 
-
 @bot.command(name="티켓패널")
-@commands.check(
-    lambda ctx: isinstance(ctx.author, discord.Member) and is_bot_admin(ctx.author)
-)
+@commands.check(lambda ctx: isinstance(ctx.author, discord.Member) and is_bot_admin(ctx.author))
 async def ticketpanel(ctx: commands.Context):
-    embed = discord.Embed(
-        title="냥코 티켓",
-        description="아래 버튼을 눌러 티켓을 생성하세요.",
-        color=0x2ECC71,
-    )
+    embed = discord.Embed(title="냥코 티켓", description="버튼을 눌러 티켓 생성", color=0x2ECC71)
     await ctx.send(embed=embed, view=TicketView())
-
 
 bot.run(os.environ.get("TOKEN"))
