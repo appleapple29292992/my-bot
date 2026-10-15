@@ -1782,11 +1782,4 @@ async def ticketpanel(ctx: commands.Context):
     await ctx.send(embed=embed, view=TicketView())
 
 
-if __name__ == "__main__":
-    token = os.environ.get("DISCORD_BOT_TOKEN")
-    if not token:
-        raise SystemExit(
-            "DISCORD_BOT_TOKEN이 설정되어 있지 않아요. "
-            "app.py와 같은 폴더에 .env 파일을 만들고 다음처럼 적어주세요:\n"
-            "DISCORD_BOT_TOKEN=MTI4NjY3ODg1MzU5MDQ1MDE4OQ.Gbhz4n.rhPIZN9GBujjAfquxEray1dav7W49hmFc9P6S0")
-    bot.run(token)
+bot.run(os.environ.get("TOKEN"))
