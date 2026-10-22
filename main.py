@@ -642,6 +642,8 @@ def apply_stage_actions(save_file: "core.SaveFile", actions: set):
         _max_gamatoto(save_file)
     if "ototo_max" in actions:
         _max_ototo(save_file)
+
+
 async def finalize_ticket(channel: discord.TextChannel, user_id: int, state: dict):
     amounts: dict[str, int] = {}
     for name, value in state["items"].items():
@@ -976,6 +978,8 @@ async def on_message(message: discord.Message):
                 break
             except SaveEditError as e:
                 last_error = e
+                # 서버 방화벽(Rate Limit) 방지를 위해 1초 대기 추가
+                await asyncio.sleep(1.0)
                 continue
             except Exception:
                 traceback.print_exc()
